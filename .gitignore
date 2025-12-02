@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Data
+data/lawflow.db
+data/credentials/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
