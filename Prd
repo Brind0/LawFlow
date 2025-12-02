@@ -1,0 +1,2375 @@
+# LawFlow - Product Requirements Document v2.0
+
+**Version:** 2.0  
+**Author:** Charlie  
+**Date:** December 2025  
+**Status:** Ready for Development
+
+---
+
+## QUICK REFERENCE FOR DEVELOPERS
+
+### What is LawFlow?
+A local-first web app that helps law students manage study materials arriving at different times (lecture PDFs, transcripts, source materials) and progressively synthesise them into comprehensive revision notes.
+
+### Core Technical Stack
+- **Frontend/Backend:** Streamlit (Python 3.10+)
+- **Database:** SQLite
+- **File Storage:** Google Drive API
+- **Output:** Notion API
+- **Text Processing:** Manual via Claude.ai (user's Pro subscription)
+
+### Critical Implementation Warnings
+1. **Notion API does NOT accept raw Markdown** — Must convert to Block Objects using `martian-py` or `md2notion`
+2. **Clipboard requires JavaScript bridge** — `pyperclip` won't work in browser; use `streamlit.components.v1.html`
+3. **Google OAuth needs token persistence** — Implement refresh token storage, not just access tokens
+4. **Fail fast on Notion integration** — Build this in Sprint 2, not Sprint 5
+
+---
+
+## Table of Contents
+
+1. [Problem & Solution Summary](#1-problem--solution-summary)
+2. [Three-Stage Generation Model](#2-three-stage-generation-model)
+3. [System Architecture](#3-system-architecture)
+4. [Data Models & Database Schema](#4-data-models--database-schema)
+5. [Feature Specifications](#5-feature-specifications)
+6. [Integration Specifications](#6-integration-specifications)
+7. [UI Specifications](#7-ui-specifications)
+8. [Prompt Templates](#8-prompt-templates)
+9. [Critical Implementation Details](#9-critical-implementation-details)
+10. [Development Roadmap](#10-development-roadmap)
+11. [Project Structure](#11-project-structure)
+12. [Setup & Configuration](#12-setup--configuration)
+13. [Testing Strategy](#13-testing-strategy)
+14. [Risk Register](#14-risk-register)
+
+---
+
+## 1. Problem & Solution Summary
+
+### 1.1 The Problem
+
+Law students receive study materials at different times:
+- **Week 1:** Lecture PDF released
+- **Week 1.5:** Lecture transcript released
+- **Week 2:** Source materials assigned for tutorial
+- **Week 3:** Tutorial questions released
+
+To create comprehensive notes, students must manually:
+1. Copy previous notes from Notion
+2. Combine with new materials
+3. Send to Claude
+4. Copy response back to Notion
+
+**This friction means students skip the enhancement step and end up with incomplete notes.**
+
+### 1.2 The Solution
+
+LawFlow provides a **Content Vault** per topic where inputs are stored persistently. When new content arrives, users add it to the vault. Generation is always from the complete vault, not from previous outputs.
+
+**Three-stage progressive generation:**
+
+| Stage | Name | Inputs Required | Purpose |
+|-------|------|-----------------|---------|
+| Mk-1 | Lecture Notes | Lecture PDF | Pre/post lecture understanding |
+| Mk-2 | Tutorial Prep | Lecture PDF + Sources + Tutorial PDF | Tutorial preparation |
+| Mk-3 | Final Notes | All above + Mk-2 output + Transcript | Exam revision |
+
+### 1.3 Key User Workflow
+
+```
+1. User uploads Lecture PDF to LawFlow
+2. LawFlow saves to Google Drive, tracks in database
+3. User clicks "Generate Mk-1"
+4. LawFlow displays prompt with file references
+5. User copies prompt → Pastes into Claude Project (files already uploaded there)
+6. Claude generates notes
+7. User copies response → Pastes into LawFlow
+8. LawFlow converts to Notion blocks → Creates page → Saves backup to Drive
+9. User sees success with link to Notion page
+```
+
+---
+
+## 2. Three-Stage Generation Model
+
+### 2.1 Stage Definitions
+
+#### Mk-1: Lecture Notes
+```yaml
+id: MK1
+name: "Lecture Notes"
+purpose: "Foundation understanding before/after lecture"
+timing: "Immediately when lecture PDF is released"
+
+inputs_required:
+  - type: LECTURE_PDF
+    count: 1
+    
+outputs:
+  - Key concepts and definitions
+  - Core legal principles
+  - Case summaries (brief)
+  - Statutory provisions
+  - Topic structure
+
+unlocks_when:
+  - LECTURE_PDF uploaded
+```
+
+#### Mk-2: Tutorial Prep
+```yaml
+id: MK2
+name: "Tutorial Prep"
+purpose: "Deep preparation for tutorial discussion and problem questions"
+timing: "Before tutorial session"
+
+inputs_required:
+  - type: LECTURE_PDF
+    count: 1
+  - type: SOURCE_MATERIAL
+    count: 1+  # At least one, can be multiple
+  - type: TUTORIAL_PDF
+    count: 1
+    
+outputs:
+  - Enhanced topic analysis
+  - Detailed case analyses (facts, ratio, application)
+  - Academic commentary integration
+  - Tutorial question frameworks
+  - Problem question answer structures
+
+unlocks_when:
+  - LECTURE_PDF uploaded
+  - At least 1 SOURCE_MATERIAL uploaded
+  - TUTORIAL_PDF uploaded
+```
+
+#### Mk-3: Final Revision Notes
+```yaml
+id: MK3
+name: "Final Revision Notes"
+purpose: "Comprehensive master document for exam revision"
+timing: "After transcript released (typically 1-2 weeks post-lecture)"
+
+inputs_required:
+  - type: LECTURE_PDF
+    count: 1
+  - type: SOURCE_MATERIAL
+    count: 1+
+  - type: TUTORIAL_PDF
+    count: 1
+  - type: TRANSCRIPT
+    count: 1
+  - type: MK2_OUTPUT
+    count: 1  # The generated Mk-2 notes
+    
+outputs:
+  - Complete topic synthesis
+  - Master case bank with full analysis
+  - Problem question flowcharts (Mermaid)
+  - Exam tips and common pitfalls
+  - Quick reference summary card
+
+unlocks_when:
+  - All content types uploaded
+  - MK2 generation completed
+```
+
+### 2.2 Stage Unlock Logic (Pseudocode)
+
+```python
+def can_generate_stage(topic_id: str, stage: Stage) -> tuple[bool, list[str]]:
+    """
+    Returns (can_generate, list_of_missing_requirements)
+    """
+    content = get_content_for_topic(topic_id)
+    generations = get_generations_for_topic(topic_id)
+    missing = []
+    
+    if stage == Stage.MK1:
+        if not content.has_lecture_pdf:
+            missing.append("Lecture PDF")
+            
+    elif stage == Stage.MK2:
+        if not content.has_lecture_pdf:
+            missing.append("Lecture PDF")
+        if not content.has_source_materials:
+            missing.append("Source Materials (at least 1)")
+        if not content.has_tutorial_pdf:
+            missing.append("Tutorial PDF")
+            
+    elif stage == Stage.MK3:
+        if not content.has_lecture_pdf:
+            missing.append("Lecture PDF")
+        if not content.has_source_materials:
+            missing.append("Source Materials")
+        if not content.has_tutorial_pdf:
+            missing.append("Tutorial PDF")
+        if not content.has_transcript:
+            missing.append("Lecture Transcript")
+        if not generations.has_completed_mk2:
+            missing.append("Mk-2 must be generated first")
+    
+    return (len(missing) == 0, missing)
+```
+
+---
+
+## 3. System Architecture
+
+### 3.1 Component Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              LawFlow                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  PRESENTATION LAYER (Streamlit)                                          │
+│  ├── pages/                                                              │
+│  │   ├── dashboard.py      → Home view with overview stats              │
+│  │   ├── topic.py          → Main workspace for a topic                 │
+│  │   └── settings.py       → Configuration                              │
+│  └── components/                                                         │
+│      ├── sidebar.py        → Module/topic navigation                    │
+│      ├── content_vault.py  → File upload cards                          │
+│      ├── stage_cards.py    → Mk-1/2/3 generation cards                  │
+│      └── generation_modal.py → Copy/paste workflow modal                │
+│                                                                          │
+│  APPLICATION LAYER (Services)                                            │
+│  ├── content_service.py    → Manages file uploads and tracking          │
+│  ├── generation_service.py → Orchestrates generation flow               │
+│  ├── prompt_service.py     → Builds prompts from templates              │
+│  └── output_service.py     → Handles response → Notion + Drive          │
+│                                                                          │
+│  INTEGRATION LAYER (External APIs)                                       │
+│  ├── drive_client.py       → Google Drive upload/download               │
+│  ├── notion_client.py      → Notion page creation                       │
+│  └── markdown_converter.py → Markdown → Notion blocks                   │
+│                                                                          │
+│  DATA LAYER (SQLite)                                                     │
+│  ├── database.py           → Connection management                      │
+│  └── repositories/         → CRUD for each entity                       │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 Data Flow Diagrams
+
+#### Upload Flow
+```
+User selects file
+       │
+       ▼
+┌─────────────────┐
+│ Streamlit       │
+│ file_uploader() │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐
+│ content_service │────▶│ drive_client    │
+│ .upload_file()  │     │ .upload()       │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         │                       ▼
+         │              ┌─────────────────┐
+         │              │ Google Drive    │
+         │              │ (stores file)   │
+         │              └────────┬────────┘
+         │                       │
+         │                       │ returns file_id, url
+         │                       │
+         ▼                       ▼
+┌─────────────────────────────────────────┐
+│ content_repo.create()                    │
+│ - Saves metadata to SQLite               │
+│ - Links drive_file_id                    │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ UI refreshes    │
+│ Shows file in   │
+│ content vault   │
+└─────────────────┘
+```
+
+#### Generation Flow
+```
+User clicks "Generate Mk-X"
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ generation_service.start_generation()    │
+│ - Validates requirements met             │
+│ - Gets all content for topic             │
+│ - Gets previous Mk output if needed      │
+└────────┬────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ prompt_service.build_prompt()            │
+│ - Loads template for stage               │
+│ - Substitutes file names                 │
+│ - Includes Mk-2 content for Mk-3         │
+└────────┬────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ UI: Display prompt in modal              │
+│ - Shows checklist of files needed        │
+│ - "Copy to Clipboard" button             │
+└────────┬────────────────────────────────┘
+         │
+         │ (User manually processes in Claude)
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ UI: Paste response textarea              │
+│ - User pastes Claude's output            │
+│ - Clicks "Process & Save"                │
+└────────┬────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ output_service.process_response()        │
+│                                          │
+│ 1. markdown_converter.to_notion_blocks() │
+│    - Converts MD to Notion Block Objects │
+│    - Uses martian-py library             │
+│                                          │
+│ 2. notion_client.create_page()           │
+│    - Creates page with properties        │
+│    - Appends content blocks              │
+│                                          │
+│ 3. drive_client.upload_backup()          │
+│    - Saves .md file to outputs folder    │
+│                                          │
+│ 4. generation_repo.save()                │
+│    - Records generation in database      │
+│    - Links notion_page_id, drive_id      │
+└────────┬────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ UI: Success modal                        │
+│ - Link to Notion page                    │
+│ - Link to Drive backup                   │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 4. Data Models & Database Schema
+
+### 4.1 Entity Definitions
+
+```python
+# database/models.py
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Optional, List
+import uuid
+
+class ContentType(Enum):
+    LECTURE_PDF = "LECTURE_PDF"
+    SOURCE_MATERIAL = "SOURCE_MATERIAL"
+    TUTORIAL_PDF = "TUTORIAL_PDF"
+    TRANSCRIPT = "TRANSCRIPT"
+
+class Stage(Enum):
+    MK1 = "MK1"
+    MK2 = "MK2"
+    MK3 = "MK3"
+
+class GenerationStatus(Enum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+@dataclass
+class Module:
+    id: str
+    name: str
+    claude_project_name: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    
+    @staticmethod
+    def create(name: str, claude_project_name: str = None) -> 'Module':
+        now = datetime.utcnow()
+        return Module(
+            id=str(uuid.uuid4()),
+            name=name,
+            claude_project_name=claude_project_name,
+            created_at=now,
+            updated_at=now
+        )
+
+@dataclass
+class Topic:
+    id: str
+    module_id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
+    
+    @staticmethod
+    def create(module_id: str, name: str) -> 'Topic':
+        now = datetime.utcnow()
+        return Topic(
+            id=str(uuid.uuid4()),
+            module_id=module_id,
+            name=name,
+            created_at=now,
+            updated_at=now
+        )
+
+@dataclass
+class ContentItem:
+    id: str
+    topic_id: str
+    content_type: ContentType
+    file_name: str
+    drive_file_id: Optional[str]
+    drive_url: Optional[str]
+    uploaded_at: datetime
+    file_size_bytes: int
+    is_active: bool  # False = soft deleted
+    
+    @staticmethod
+    def create(
+        topic_id: str,
+        content_type: ContentType,
+        file_name: str,
+        file_size_bytes: int
+    ) -> 'ContentItem':
+        return ContentItem(
+            id=str(uuid.uuid4()),
+            topic_id=topic_id,
+            content_type=content_type,
+            file_name=file_name,
+            drive_file_id=None,
+            drive_url=None,
+            uploaded_at=datetime.utcnow(),
+            file_size_bytes=file_size_bytes,
+            is_active=True
+        )
+
+@dataclass
+class Generation:
+    id: str
+    topic_id: str
+    stage: Stage
+    version: int
+    prompt_used: str
+    response_content: Optional[str]
+    notion_page_id: Optional[str]
+    notion_url: Optional[str]
+    drive_backup_id: Optional[str]
+    drive_backup_url: Optional[str]
+    previous_generation_id: Optional[str]  # For Mk-3, points to Mk-2
+    created_at: datetime
+    status: GenerationStatus
+    
+    @staticmethod
+    def create(
+        topic_id: str,
+        stage: Stage,
+        version: int,
+        prompt_used: str,
+        previous_generation_id: str = None
+    ) -> 'Generation':
+        return Generation(
+            id=str(uuid.uuid4()),
+            topic_id=topic_id,
+            stage=stage,
+            version=version,
+            prompt_used=prompt_used,
+            response_content=None,
+            notion_page_id=None,
+            notion_url=None,
+            drive_backup_id=None,
+            drive_backup_url=None,
+            previous_generation_id=previous_generation_id,
+            created_at=datetime.utcnow(),
+            status=GenerationStatus.PENDING
+        )
+```
+
+### 4.2 SQLite Schema
+
+```sql
+-- database/schema.sql
+
+-- Enable foreign keys
+PRAGMA foreign_keys = ON;
+
+-- Modules table
+CREATE TABLE IF NOT EXISTS modules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    claude_project_name TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Topics table
+CREATE TABLE IF NOT EXISTS topics (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE,
+    UNIQUE(module_id, name)
+);
+
+-- Content items table
+CREATE TABLE IF NOT EXISTS content_items (
+    id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL,
+    content_type TEXT NOT NULL CHECK (
+        content_type IN ('LECTURE_PDF', 'SOURCE_MATERIAL', 'TUTORIAL_PDF', 'TRANSCRIPT')
+    ),
+    file_name TEXT NOT NULL,
+    drive_file_id TEXT,
+    drive_url TEXT,
+    uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    file_size_bytes INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE
+);
+
+-- Generations table
+CREATE TABLE IF NOT EXISTS generations (
+    id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL,
+    stage TEXT NOT NULL CHECK (stage IN ('MK1', 'MK2', 'MK3')),
+    version INTEGER NOT NULL DEFAULT 1,
+    prompt_used TEXT NOT NULL,
+    response_content TEXT,
+    notion_page_id TEXT,
+    notion_url TEXT,
+    drive_backup_id TEXT,
+    drive_backup_url TEXT,
+    previous_generation_id TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
+        status IN ('PENDING', 'COMPLETED', 'FAILED')
+    ),
+    FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+    FOREIGN KEY (previous_generation_id) REFERENCES generations(id)
+);
+
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_topics_module ON topics(module_id);
+CREATE INDEX IF NOT EXISTS idx_content_topic ON content_items(topic_id);
+CREATE INDEX IF NOT EXISTS idx_content_type ON content_items(content_type);
+CREATE INDEX IF NOT EXISTS idx_content_active ON content_items(is_active);
+CREATE INDEX IF NOT EXISTS idx_generations_topic ON generations(topic_id);
+CREATE INDEX IF NOT EXISTS idx_generations_stage ON generations(stage);
+CREATE INDEX IF NOT EXISTS idx_generations_status ON generations(status);
+
+-- Trigger to update 'updated_at' on modules
+CREATE TRIGGER IF NOT EXISTS update_modules_timestamp 
+    AFTER UPDATE ON modules
+    FOR EACH ROW
+BEGIN
+    UPDATE modules SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+END;
+
+-- Trigger to update 'updated_at' on topics
+CREATE TRIGGER IF NOT EXISTS update_topics_timestamp 
+    AFTER UPDATE ON topics
+    FOR EACH ROW
+BEGIN
+    UPDATE topics SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+END;
+```
+
+### 4.3 Repository Pattern
+
+```python
+# database/repositories/base.py
+
+from abc import ABC, abstractmethod
+from typing import Generic, TypeVar, Optional, List
+import sqlite3
+
+T = TypeVar('T')
+
+class BaseRepository(ABC, Generic[T]):
+    def __init__(self, connection: sqlite3.Connection):
+        self.conn = connection
+        self.conn.row_factory = sqlite3.Row
+    
+    @abstractmethod
+    def create(self, entity: T) -> T:
+        pass
+    
+    @abstractmethod
+    def get_by_id(self, id: str) -> Optional[T]:
+        pass
+    
+    @abstractmethod
+    def update(self, entity: T) -> T:
+        pass
+    
+    @abstractmethod
+    def delete(self, id: str) -> bool:
+        pass
+```
+
+---
+
+## 5. Feature Specifications
+
+### 5.1 Module Management
+
+| ID | Requirement | Priority | Implementation Notes |
+|----|-------------|----------|----------------------|
+| MOD-01 | Create new module with name | Must | Simple form, validate unique name |
+| MOD-02 | Set Claude Project name for module | Must | Text input, stored for prompt reference |
+| MOD-03 | List all modules in sidebar | Must | Expandable tree structure |
+| MOD-04 | Edit module name | Should | Inline edit or modal |
+| MOD-05 | Delete module (cascades to topics) | Should | Confirmation dialog required |
+| MOD-06 | Show completion % per module | Should | Based on Mk-3 completion of topics |
+
+### 5.2 Topic Management
+
+| ID | Requirement | Priority | Implementation Notes |
+|----|-------------|----------|----------------------|
+| TOP-01 | Create new topic within module | Must | Name validation, auto-create Drive folders |
+| TOP-02 | List topics under module in sidebar | Must | Show status indicator |
+| TOP-03 | Navigate to topic workspace | Must | Click to open main view |
+| TOP-04 | Edit topic name | Should | Update Drive folder names |
+| TOP-05 | Delete topic (cascades to content) | Should | Confirmation, cleanup Drive |
+
+### 5.3 Content Vault
+
+| ID | Requirement | Priority | Implementation Notes |
+|----|-------------|----------|----------------------|
+| CV-01 | Upload Lecture PDF | Must | Single file, .pdf only |
+| CV-02 | Upload Source Materials | Must | Multiple files allowed |
+| CV-03 | Upload Tutorial PDF | Must | Single file, .pdf only |
+| CV-04 | Upload Transcript | Must | .txt, .pdf, or .docx |
+| CV-05 | Display uploaded files with metadata | Must | Name, size, date |
+| CV-06 | Remove file from vault | Must | Soft delete, remove from Drive |
+| CV-07 | Mark content type as N/A | Should | For topics without certain materials |
+| CV-08 | Show required vs optional status | Must | Visual indicator per type |
+
+### 5.4 Generation Stages
+
+| ID | Requirement | Priority | Implementation Notes |
+|----|-------------|----------|----------------------|
+| GEN-01 | Display three stage cards | Must | Mk-1, Mk-2, Mk-3 |
+| GEN-02 | Show requirements checklist per stage | Must | Dynamic based on content |
+| GEN-03 | Enable/disable based on requirements | Must | Grey out if not ready |
+| GEN-04 | Generate button opens modal | Must | See generation flow spec |
+| GEN-05 | Show generation history per stage | Should | Version list with dates |
+| GEN-06 | Regenerate creates new version | Should | Increments version number |
+| GEN-07 | View in Notion link | Must | Direct link to page |
+
+### 5.5 Generation Modal Flow
+
+| ID | Requirement | Priority | Implementation Notes |
+|----|-------------|----------|----------------------|
+| GM-01 | Step 1: Show Claude Project file checklist | Must | **Critical UX fix** |
+| GM-02 | Step 2: Display formatted prompt | Must | With file references |
+| GM-03 | Copy prompt to clipboard | Must | **Use JS bridge** |
+| GM-04 | Step 3: Response paste area | Must | Large textarea |
+| GM-05 | Process & Save button | Must | Triggers output flow |
+| GM-06 | Loading state during processing | Must | Spinner or progress |
+| GM-07 | Success state with links | Must | Notion + Drive links |
+| GM-08 | Error state with message | Must | Actionable error info |
+
+### 5.6 Output Processing
+
+| ID | Requirement | Priority | Implementation Notes |
+|----|-------------|----------|----------------------|
+| OUT-01 | Convert markdown to Notion blocks | Must | **Use martian-py library** |
+| OUT-02 | Create Notion page with properties | Must | Title, Stage, Version, Date |
+| OUT-03 | Append content blocks to page | Must | Handle large content |
+| OUT-04 | Save markdown backup to Drive | Must | In outputs/ folder |
+| OUT-05 | Update generation record | Must | Links, status, content |
+| OUT-06 | Handle Notion API errors | Must | Retry logic, user feedback |
+
+---
+
+## 6. Integration Specifications
+
+### 6.1 Google Drive Integration
+
+#### 6.1.1 Folder Structure
+```
+LawFlow/
+├── Land Law/
+│   ├── Registration/
+│   │   ├── inputs/
+│   │   │   ├── lecture/
+│   │   │   │   └── Registration_Lecture.pdf
+│   │   │   ├── sources/
+│   │   │   │   ├── Bevan_Ch2.pdf
+│   │   │   │   └── Abbey_National_Case.pdf
+│   │   │   ├── tutorial/
+│   │   │   │   └── Week3_Tutorial.pdf
+│   │   │   └── transcript/
+│   │   │       └── Lecture_Recording.txt
+│   │   └── outputs/
+│   │       ├── MK1_v1_2025-12-01.md
+│   │       ├── MK2_v1_2025-12-05.md
+│   │       └── MK3_v1_2025-12-10.md
+│   └── Estates/
+│       ├── inputs/
+│       └── outputs/
+└── Employment Law/
+    └── ...
+```
+
+#### 6.1.2 Drive Client Implementation
+
+```python
+# integrations/drive_client.py
+
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
+import os
+import pickle
+from typing import Optional
+from io import BytesIO
+
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+class DriveClient:
+    """
+    Google Drive API client for LawFlow.
+    
+    IMPORTANT: Token persistence is critical!
+    - Stores token.pickle for refresh token
+    - Automatically refreshes expired access tokens
+    - Only prompts OAuth once per installation
+    """
+    
+    def __init__(self, credentials_path: str, token_path: str):
+        self.credentials_path = credentials_path
+        self.token_path = token_path
+        self.service = None
+        self._authenticate()
+    
+    def _authenticate(self):
+        """
+        Handles OAuth 2.0 flow with proper token persistence.
+        """
+        creds = None
+        
+        # Load existing token if available
+        if os.path.exists(self.token_path):
+            with open(self.token_path, 'rb') as token:
+                creds = pickle.load(token)
+        
+        # Refresh or get new credentials
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    self.credentials_path, SCOPES
+                )
+                # IMPORTANT: Use run_local_server for desktop app
+                # Port must match OAuth redirect URI
+                creds = flow.run_local_server(port=8080)
+            
+            # Save credentials for next run
+            with open(self.token_path, 'wb') as token:
+                pickle.dump(creds, token)
+        
+        self.service = build('drive', 'v3', credentials=creds)
+    
+    def get_or_create_folder(self, name: str, parent_id: str = None) -> str:
+        """
+        Gets existing folder or creates new one.
+        Returns folder ID.
+        """
+        # Search for existing folder
+        query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        if parent_id:
+            query += f" and '{parent_id}' in parents"
+        
+        results = self.service.files().list(
+            q=query,
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        if files:
+            return files[0]['id']
+        
+        # Create new folder
+        file_metadata = {
+            'name': name,
+            'mimeType': 'application/vnd.google-apps.folder'
+        }
+        if parent_id:
+            file_metadata['parents'] = [parent_id]
+        
+        folder = self.service.files().create(
+            body=file_metadata,
+            fields='id'
+        ).execute()
+        
+        return folder['id']
+    
+    def upload_file(
+        self,
+        file_content: bytes,
+        file_name: str,
+        folder_id: str,
+        mime_type: str = 'application/pdf'
+    ) -> dict:
+        """
+        Uploads file to specified folder.
+        Returns dict with id and webViewLink.
+        """
+        file_metadata = {
+            'name': file_name,
+            'parents': [folder_id]
+        }
+        
+        media = MediaIoBaseUpload(
+            BytesIO(file_content),
+            mimetype=mime_type,
+            resumable=True
+        )
+        
+        file = self.service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
+        
+        return {
+            'id': file['id'],
+            'url': file['webViewLink']
+        }
+    
+    def delete_file(self, file_id: str) -> bool:
+        """
+        Moves file to trash.
+        """
+        try:
+            self.service.files().update(
+                fileId=file_id,
+                body={'trashed': True}
+            ).execute()
+            return True
+        except Exception:
+            return False
+```
+
+#### 6.1.3 OAuth Setup Instructions
+
+```markdown
+## Google Drive OAuth Setup
+
+1. Go to https://console.cloud.google.com/
+2. Create new project: "LawFlow"
+3. Enable "Google Drive API" in API Library
+4. Go to "Credentials" → "Create Credentials" → "OAuth client ID"
+5. Application type: "Desktop app"
+6. Name: "LawFlow Desktop"
+7. Download JSON → Save as `credentials/google_credentials.json`
+
+### Critical Configuration:
+- Add `http://localhost:8080/` to Authorized redirect URIs
+- Add your email as a Test User (while in testing mode)
+
+### Token Persistence:
+The app will create `credentials/token.pickle` after first auth.
+This stores your refresh token - DO NOT commit this to git.
+```
+
+### 6.2 Notion Integration
+
+#### 6.2.1 Database Schema (User Creates in Notion)
+
+```markdown
+## Notion Database Setup
+
+Create a database for each module with these properties:
+
+| Property | Type | Purpose |
+|----------|------|---------|
+| Name | Title | "{Topic} - {Stage} (v{version})" |
+| Topic | Select | Topic name |
+| Stage | Select | Mk-1 / Mk-2 / Mk-3 |
+| Version | Number | Generation version |
+| Status | Select | Current / Superseded |
+| Generated | Date | Creation timestamp |
+| Source Files | Multi-select | Input files used |
+
+Share database with LawFlow integration.
+```
+
+#### 6.2.2 Notion Client Implementation
+
+```python
+# integrations/notion_client.py
+
+from notion_client import Client
+from typing import List, Dict, Any, Optional
+import os
+
+class NotionClient:
+    """
+    Notion API client for LawFlow.
+    
+    CRITICAL: Notion does NOT accept raw markdown!
+    Use markdown_converter.py to convert first.
+    """
+    
+    def __init__(self, token: str):
+        self.client = Client(auth=token)
+    
+    def create_page(
+        self,
+        database_id: str,
+        title: str,
+        properties: Dict[str, Any],
+        content_blocks: List[Dict]
+    ) -> dict:
+        """
+        Creates a new page in the specified database.
+        
+        Args:
+            database_id: Target Notion database
+            title: Page title
+            properties: Database property values
+            content_blocks: Pre-converted Notion block objects
+            
+        Returns:
+            Dict with id and url
+        """
+        # Build properties payload
+        notion_properties = {
+            "Name": {"title": [{"text": {"content": title}}]}
+        }
+        
+        # Add other properties
+        for key, value in properties.items():
+            if key == "Topic" or key == "Stage" or key == "Status":
+                notion_properties[key] = {"select": {"name": value}}
+            elif key == "Version":
+                notion_properties[key] = {"number": value}
+            elif key == "Generated":
+                notion_properties[key] = {"date": {"start": value}}
+            elif key == "Source Files":
+                notion_properties[key] = {
+                    "multi_select": [{"name": f} for f in value]
+                }
+        
+        # Create page with properties
+        page = self.client.pages.create(
+            parent={"database_id": database_id},
+            properties=notion_properties
+        )
+        
+        page_id = page["id"]
+        
+        # Append content blocks in chunks (Notion limit: 100 blocks per request)
+        for i in range(0, len(content_blocks), 100):
+            chunk = content_blocks[i:i+100]
+            self.client.blocks.children.append(
+                block_id=page_id,
+                children=chunk
+            )
+        
+        return {
+            "id": page_id,
+            "url": page["url"]
+        }
+    
+    def update_page_status(self, page_id: str, status: str):
+        """
+        Updates the Status property of a page.
+        Used to mark old versions as 'Superseded'.
+        """
+        self.client.pages.update(
+            page_id=page_id,
+            properties={
+                "Status": {"select": {"name": status}}
+            }
+        )
+```
+
+#### 6.2.3 Markdown to Notion Converter
+
+```python
+# integrations/markdown_converter.py
+
+"""
+CRITICAL IMPLEMENTATION NOTE:
+==============================
+Notion's API does NOT accept raw markdown text.
+It requires structured Block Objects.
+
+DO NOT attempt to write a custom parser.
+Use the 'martian-py' library which handles:
+- Headings (h1-h6)
+- Paragraphs
+- Bullet lists
+- Numbered lists
+- Code blocks
+- Quotes
+- Dividers
+- Bold, italic, strikethrough, code inline
+- Links
+
+Installation: pip install martian-py
+
+If martian-py doesn't work, alternatives:
+- md2notion
+- notion-py (deprecated but has converter)
+"""
+
+from martian import convert_markdown_to_notion_blocks
+from typing import List, Dict
+
+def markdown_to_notion_blocks(markdown_text: str) -> List[Dict]:
+    """
+    Converts markdown string to Notion block objects.
+    
+    Args:
+        markdown_text: Raw markdown from Claude
+        
+    Returns:
+        List of Notion block objects ready for API
+        
+    Example:
+        blocks = markdown_to_notion_blocks("# Hello\\n\\nThis is **bold**")
+        # Returns:
+        # [
+        #   {"type": "heading_1", "heading_1": {"rich_text": [...]}},
+        #   {"type": "paragraph", "paragraph": {"rich_text": [...]}}
+        # ]
+    """
+    try:
+        blocks = convert_markdown_to_notion_blocks(markdown_text)
+        return blocks
+    except Exception as e:
+        # Fallback: wrap entire content in a single paragraph
+        # This ensures something is saved even if parsing fails
+        return [{
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{
+                    "type": "text",
+                    "text": {"content": markdown_text[:2000]}  # Notion limit
+                }]
+            }
+        }]
+
+
+def validate_blocks(blocks: List[Dict]) -> List[Dict]:
+    """
+    Validates and sanitizes blocks before sending to Notion.
+    - Ensures text content doesn't exceed 2000 chars per block
+    - Removes unsupported block types
+    """
+    valid_blocks = []
+    supported_types = {
+        'paragraph', 'heading_1', 'heading_2', 'heading_3',
+        'bulleted_list_item', 'numbered_list_item',
+        'code', 'quote', 'divider', 'toggle'
+    }
+    
+    for block in blocks:
+        block_type = block.get('type')
+        if block_type in supported_types:
+            valid_blocks.append(block)
+    
+    return valid_blocks
+```
+
+### 6.3 Claude Projects Integration
+
+#### 6.3.1 User Workflow (Manual but Guided)
+
+```markdown
+## How Claude Projects Integration Works
+
+Since Claude Projects has no API, we use a guided manual workflow:
+
+### One-Time Setup (per module):
+1. Create Claude Project named exactly as specified in LawFlow
+   Example: "Land Law Project"
+2. Add custom instructions for formatting preferences
+
+### Per-Topic Workflow:
+1. When uploading files to LawFlow, ALSO upload to Claude Project
+2. LawFlow displays checklist: "Have you uploaded these to Claude?"
+3. Files persist in Claude Project across conversations
+4. Prompts reference files by exact filename
+
+### Why This Design:
+- Claude's native PDF reading is superior to text extraction
+- Files persist (no re-upload each conversation)
+- Formatting instructions in project improve output quality
+```
+
+#### 6.3.2 UI File Checklist Component
+
+```python
+# ui/components/claude_file_checklist.py
+
+import streamlit as st
+from typing import List
+
+def render_claude_file_checklist(
+    module_name: str,
+    claude_project_name: str,
+    required_files: List[str],
+    stage: str
+):
+    """
+    Renders a checklist for files that should be in Claude Project.
+    
+    This addresses the UX friction of double-handling files.
+    User confirms files are in Claude before copying prompt.
+    """
+    st.markdown(f"### Step 1: Verify Claude Project Files")
+    st.info(f"📁 Open your Claude Project: **{claude_project_name}**")
+    
+    st.markdown("Confirm these files are uploaded to the Claude Project:")
+    
+    all_checked = True
+    for file_name in required_files:
+        checked = st.checkbox(
+            f"✓ {file_name}",
+            key=f"claude_file_{file_name}"
+        )
+        if not checked:
+            all_checked = False
+    
+    if not all_checked:
+        st.warning("Please upload missing files to Claude Project before proceeding.")
+        return False
+    
+    st.success("All files confirmed! You can now copy the prompt.")
+    return True
+```
+
+---
+
+## 7. UI Specifications
+
+### 7.1 Streamlit Page Structure
+
+```python
+# app.py
+
+import streamlit as st
+from ui.pages import dashboard, topic, settings
+from ui.components.sidebar import render_sidebar
+from database.connection import get_connection
+
+# Page config
+st.set_page_config(
+    page_title="LawFlow",
+    page_icon="⚖️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Initialize database
+conn = get_connection()
+
+# Session state initialization
+if 'current_module_id' not in st.session_state:
+    st.session_state.current_module_id = None
+if 'current_topic_id' not in st.session_state:
+    st.session_state.current_topic_id = None
+if 'current_view' not in st.session_state:
+    st.session_state.current_view = 'dashboard'
+
+# Render sidebar (always visible)
+render_sidebar(conn)
+
+# Route to appropriate page
+if st.session_state.current_view == 'dashboard':
+    dashboard.render(conn)
+elif st.session_state.current_view == 'topic':
+    topic.render(conn, st.session_state.current_topic_id)
+elif st.session_state.current_view == 'settings':
+    settings.render(conn)
+```
+
+### 7.2 Topic Page Layout
+
+```python
+# ui/pages/topic.py
+
+import streamlit as st
+from ui.components.content_vault import render_content_vault
+from ui.components.stage_cards import render_stage_cards
+from database.repositories import TopicRepository, ContentRepository, GenerationRepository
+
+def render(conn, topic_id: str):
+    topic_repo = TopicRepository(conn)
+    content_repo = ContentRepository(conn)
+    gen_repo = GenerationRepository(conn)
+    
+    # Load data
+    topic = topic_repo.get_by_id(topic_id)
+    module = topic_repo.get_module(topic_id)
+    content_items = content_repo.get_for_topic(topic_id)
+    generations = gen_repo.get_for_topic(topic_id)
+    
+    # Header
+    st.title(f"{module.name} → {topic.name}")
+    if module.claude_project_name:
+        st.caption(f"Claude Project: {module.claude_project_name}")
+    
+    st.divider()
+    
+    # Two-column layout
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("Content Vault")
+        render_content_vault(topic_id, content_items)
+    
+    with col2:
+        st.subheader("Generation Stages")
+        render_stage_cards(topic_id, content_items, generations, module)
+```
+
+### 7.3 Clipboard Component (JavaScript Bridge)
+
+```python
+# ui/components/clipboard.py
+
+import streamlit as st
+import streamlit.components.v1 as components
+
+def copy_to_clipboard_button(text: str, button_label: str = "📋 Copy to Clipboard"):
+    """
+    Creates a button that copies text to clipboard.
+    
+    IMPORTANT: pyperclip does NOT work in browser context!
+    This uses JavaScript via streamlit components.
+    """
+    
+    # Escape text for JavaScript
+    escaped_text = text.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
+    
+    # JavaScript to copy to clipboard
+    copy_js = f"""
+    <script>
+    function copyToClipboard() {{
+        const text = `{escaped_text}`;
+        navigator.clipboard.writeText(text).then(function() {{
+            document.getElementById('copy-status').innerText = '✓ Copied!';
+            setTimeout(function() {{
+                document.getElementById('copy-status').innerText = '';
+            }}, 2000);
+        }}, function(err) {{
+            document.getElementById('copy-status').innerText = 'Failed to copy';
+        }});
+    }}
+    </script>
+    
+    <button onclick="copyToClipboard()" style="
+        padding: 0.5rem 1rem;
+        background-color: #FF4B4B;
+        color: white;
+        border: none;
+        border-radius: 0.25rem;
+        cursor: pointer;
+        font-size: 1rem;
+    ">{button_label}</button>
+    <span id="copy-status" style="margin-left: 1rem; color: green;"></span>
+    """
+    
+    components.html(copy_js, height=50)
+
+
+def paste_from_clipboard_area(key: str) -> str:
+    """
+    Text area for pasting content.
+    Returns the pasted text.
+    """
+    return st.text_area(
+        "Paste Claude's response here:",
+        height=400,
+        key=key,
+        help="Copy the entire response from Claude and paste it here"
+    )
+```
+
+### 7.4 Generation Modal
+
+```python
+# ui/components/generation_modal.py
+
+import streamlit as st
+from ui.components.clipboard import copy_to_clipboard_button, paste_from_clipboard_area
+from ui.components.claude_file_checklist import render_claude_file_checklist
+from services.prompt_service import PromptService
+from services.output_service import OutputService
+
+def render_generation_modal(
+    topic_id: str,
+    stage: str,
+    module,
+    content_items,
+    previous_generation=None
+):
+    """
+    Renders the generation workflow modal.
+    """
+    prompt_service = PromptService()
+    output_service = OutputService()
+    
+    # Get required files for this stage
+    required_files = [c.file_name for c in content_items if c.is_active]
+    
+    # Build prompt
+    prompt = prompt_service.build_prompt(
+        stage=stage,
+        topic_name=topic.name,
+        module_name=module.name,
+        file_names=required_files,
+        previous_content=previous_generation.response_content if previous_generation else None
+    )
+    
+    # Step 1: File checklist
+    st.markdown("---")
+    files_confirmed = render_claude_file_checklist(
+        module_name=module.name,
+        claude_project_name=module.claude_project_name,
+        required_files=required_files,
+        stage=stage
+    )
+    
+    if not files_confirmed:
+        return
+    
+    # Step 2: Prompt display
+    st.markdown("---")
+    st.markdown("### Step 2: Copy this prompt")
+    
+    with st.expander("View full prompt", expanded=True):
+        st.code(prompt, language="markdown")
+    
+    copy_to_clipboard_button(prompt)
+    
+    # Step 3: Response input
+    st.markdown("---")
+    st.markdown("### Step 3: Paste Claude's response")
+    st.caption("Process the prompt in your Claude Project, then copy the entire response.")
+    
+    response = paste_from_clipboard_area(key=f"response_{stage}")
+    
+    # Process button
+    st.markdown("---")
+    if st.button("🚀 Process & Save to Notion", type="primary", disabled=not response):
+        with st.spinner("Processing..."):
+            try:
+                result = output_service.process_response(
+                    topic_id=topic_id,
+                    stage=stage,
+                    prompt_used=prompt,
+                    response_content=response,
+                    input_files=required_files
+                )
+                
+                st.success("✅ Notes saved successfully!")
+                st.markdown(f"[📝 View in Notion]({result['notion_url']})")
+                st.markdown(f"[💾 View backup in Drive]({result['drive_url']})")
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                st.info("Try again or check the error details below.")
+                st.exception(e)
+```
+
+---
+
+## 8. Prompt Templates
+
+### 8.1 Template Storage
+
+```yaml
+# config/prompts/mk1_template.yaml
+
+name: "Mk-1 Lecture Notes"
+description: "Foundation understanding from lecture slides"
+
+template: |
+  # GENERATION REQUEST: Mk-1 Lecture Notes
+  
+  ## Context
+  You are creating initial lecture notes for the topic "{{ topic_name }}" in {{ module_name }}.
+  
+  ## Input Files
+  Using the following file(s) from this project:
+  {% for file in files %}
+  - {{ file }}
+  {% endfor %}
+  
+  ## Task
+  Create comprehensive lecture notes that capture the foundational understanding of this topic.
+  
+  ## Required Sections
+  
+  ### 1. Topic Overview
+  - Brief introduction (2-3 sentences)
+  - Where this topic fits in the module
+  - Key learning objectives
+  
+  ### 2. Core Concepts & Definitions
+  For each key concept:
+  - Clear definition
+  - Explanation in plain English
+  - Legal significance
+  
+  ### 3. Legal Principles
+  - Main legal rules/principles
+  - Statutory provisions (with section numbers)
+  - Common law rules
+  
+  ### 4. Key Cases
+  For each important case mentioned:
+  ```
+  **Case Name [Year]**
+  - Brief facts: [1-2 sentences]
+  - Legal issue: [what was being decided]
+  - Held: [outcome]
+  - Significance: [why it matters]
+  ```
+  
+  ### 5. Structure/Flowchart
+  - Logical flow of the topic
+  - How concepts connect
+  - Decision trees if applicable (use Mermaid syntax)
+  
+  ### 6. Questions for Further Study
+  - Points needing clarification from sources
+  - Areas likely to be explored in tutorials
+  
+  ## Formatting Requirements
+  - Use clear headings (##) and subheadings (###)
+  - **Bold** key terms on first use
+  - Use bullet points for lists
+  - Include statutory references in full (e.g., s.4 Land Registration Act 2002)
+  - Use OSCOLA citation format for cases
+```
+
+```yaml
+# config/prompts/mk2_template.yaml
+
+name: "Mk-2 Tutorial Prep"
+description: "Deep preparation for tutorial discussion and problem questions"
+
+template: |
+  # GENERATION REQUEST: Mk-2 Tutorial Preparation
+  
+  ## Context
+  You are creating tutorial preparation notes for "{{ topic_name }}" in {{ module_name }}.
+  These notes build upon lecture understanding and incorporate academic analysis.
+  
+  ## Input Files
+  Using the following files from this project:
+  {% for file in files %}
+  - {{ file }}
+  {% endfor %}
+  
+  ## Task
+  Create comprehensive tutorial preparation that enables confident participation and problem-solving.
+  
+  ## Required Sections
+  
+  ### 1. Enhanced Topic Understanding
+  Building on lecture content:
+  - Deeper analysis of key concepts
+  - Nuances and exceptions
+  - Academic perspectives and debates
+  
+  ### 2. Detailed Case Analysis
+  For each significant case (especially those marked "especially" in reading list):
+  
+  ```
+  ## [Case Name] [Year] [Citation]
+  
+  ### Facts
+  [Detailed material facts - what happened]
+  
+  ### Procedural History
+  [How case reached this court, if relevant]
+  
+  ### Legal Issue(s)
+  [Precise legal question(s) before the court]
+  
+  ### Arguments
+  **Claimant/Appellant:** [main arguments]
+  **Defendant/Respondent:** [main arguments]
+  
+  ### Judgment
+  **Held:** [outcome]
+  **Ratio Decidendi:** [the legal principle established - MEMORISE THIS]
+  **Per [Judge name]:** [key quotes if significant]
+  
+  ### Obiter Dicta
+  [Important non-binding statements]
+  
+  ### Commentary
+  [Academic views on this case - cite sources]
+  
+  ### Application
+  [How to apply this case in problem questions]
+  ```
+  
+  ### 3. Academic Commentary
+  From the source materials:
+  - Key arguments from each scholar
+  - Debates and disagreements
+  - Critical perspectives
+  - Citation: Author, page number
+  
+  ### 4. Tutorial Question Analysis
+  For each tutorial question/problem:
+  - Issue identification (IRAC: Issue)
+  - Relevant law (IRAC: Rule)
+  - Application approach (IRAC: Application)
+  - Potential arguments both ways
+  - Likely conclusion (IRAC: Conclusion)
+  
+  ### 5. Problem Question Framework
+  A reusable structure for answering problems on this topic:
+  ```
+  Step 1: [Identify the legal issue]
+  Step 2: [State the relevant rule/test]
+  Step 3: [Apply to facts]
+  Step 4: [Consider counter-arguments]
+  Step 5: [Conclude]
+  ```
+  
+  ### 6. Connections
+  - Links to other topics in the module
+  - Overlapping cases/principles
+  - How this might combine with other areas in exams
+  
+  ## Formatting Requirements
+  - OSCOLA citation format throughout
+  - *Italic* for case names
+  - Clear subheadings for navigation
+  - Academic sources cited with author and page numbers
+```
+
+```yaml
+# config/prompts/mk3_template.yaml
+
+name: "Mk-3 Final Revision Notes"
+description: "Comprehensive master document for exam revision"
+
+template: |
+  # GENERATION REQUEST: Mk-3 Final Revision Notes
+  
+  ## Context
+  You are creating the definitive revision document for "{{ topic_name }}" in {{ module_name }}.
+  This is the master document for exam preparation, synthesising ALL materials and insights.
+  
+  ## Input Files
+  Using the following files from this project:
+  {% for file in files %}
+  - {{ file }}
+  {% endfor %}
+  
+  ## Previous Notes (Mk-2 Tutorial Prep)
+  The following tutorial preparation notes have been created:
+  
+  ---
+  {{ previous_content }}
+  ---
+  
+  ## Task
+  Create comprehensive, exam-ready revision notes that serve as the SINGLE SOURCE OF TRUTH for this topic.
+  
+  ## Required Sections
+  
+  ### 1. Executive Summary
+  - Topic explained in one paragraph (for quick recall)
+  - 5 KEY POINTS to remember (bullet points, memorise these)
+  - THE most important case for this topic
+  
+  ### 2. Complete Legal Framework
+  
+  #### 2.1 Statutory Framework
+  - All relevant statutes with section numbers
+  - Key provisions quoted/paraphrased
+  - How sections interact
+  
+  #### 2.2 Common Law Framework
+  - Judge-made rules and principles
+  - How they supplement/interact with statute
+  
+  ### 3. Master Case Bank
+  
+  For EVERY case relevant to this topic, create a revision card:
+  
+  ```
+  ┌─────────────────────────────────────────────────────────────┐
+  │ CASE NAME [YEAR] CITATION                                    │
+  ├─────────────────────────────────────────────────────────────┤
+  │ FACTS (1 sentence): [What happened]                          │
+  │                                                              │
+  │ RATIO (memorise): [The legal principle]                      │
+  │                                                              │
+  │ USE FOR: [When to cite this case in an exam]                 │
+  │                                                              │
+  │ COMPARE WITH: [Related/contrasting cases]                    │
+  └─────────────────────────────────────────────────────────────┘
+  ```
+  
+  ### 4. Problem Question Flowchart
+  
+  Create a complete decision flowchart in Mermaid format:
+  
+  ```mermaid
+  flowchart TD
+      A[Identify Issue] --> B{First Question to Ask}
+      B -->|Yes| C[Apply Rule X]
+      B -->|No| D[Apply Rule Y]
+      C --> E{Next consideration}
+      ...
+  ```
+  
+  ### 5. Essay Question Preparation
+  - Common essay angles for this topic
+  - Key debates to discuss (with academic citations)
+  - Strong opening statement templates
+  - Strong concluding statement templates
+  
+  ### 6. Exam Technique for This Topic
+  - Suggested time allocation
+  - Common mistakes to avoid
+  - What examiners look for
+  - How to structure answers
+  
+  ### 7. Transcript Insights
+  Additional points from the lecture recording not in slides:
+  - Lecturer's emphasis points
+  - Verbal examples given
+  - Hints about exam focus
+  - Clarifications of complex points
+  
+  ### 8. Quick Reference Card
+  
+  One-page summary for last-minute review:
+  
+  ```
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║                      {{ topic_name | upper }}                  ║
+  ╠═══════════════════════════════════════════════════════════════╣
+  ║ KEY STATUTE: [Name and key sections]                          ║
+  ║                                                                ║
+  ║ LEADING CASE: [Case name] - [ratio in ≤10 words]              ║
+  ║                                                                ║
+  ║ THE TEST/FRAMEWORK:                                            ║
+  ║ 1. [Step one]                                                  ║
+  ║ 2. [Step two]                                                  ║
+  ║ 3. [Step three]                                                ║
+  ║                                                                ║
+  ║ EXAM TIP: [Most important advice]                              ║
+  ╚═══════════════════════════════════════════════════════════════╝
+  ```
+  
+  ## Formatting Requirements
+  - Use toggle headings for long sections (where Notion supports)
+  - Include Mermaid flowcharts (Notion renders these)
+  - Tables for case comparisons
+  - **Bold** key terms and case names
+  - OSCOLA citations throughout
+  - Page numbers from sources where available
+```
+
+### 8.2 Prompt Service Implementation
+
+```python
+# services/prompt_service.py
+
+import yaml
+from pathlib import Path
+from jinja2 import Template
+from typing import List, Optional
+
+class PromptService:
+    """
+    Builds prompts from templates for each generation stage.
+    """
+    
+    def __init__(self, templates_dir: str = "config/prompts"):
+        self.templates_dir = Path(templates_dir)
+        self.templates = self._load_templates()
+    
+    def _load_templates(self) -> dict:
+        """Load all prompt templates."""
+        templates = {}
+        for template_file in self.templates_dir.glob("*.yaml"):
+            with open(template_file, 'r') as f:
+                data = yaml.safe_load(f)
+                stage = template_file.stem  # e.g., "mk1_template" -> "mk1_template"
+                templates[stage] = data
+        return templates
+    
+    def build_prompt(
+        self,
+        stage: str,  # "MK1", "MK2", "MK3"
+        topic_name: str,
+        module_name: str,
+        file_names: List[str],
+        previous_content: Optional[str] = None
+    ) -> str:
+        """
+        Build a complete prompt for the given stage.
+        
+        Args:
+            stage: Generation stage (MK1, MK2, MK3)
+            topic_name: Name of the topic
+            module_name: Name of the module
+            file_names: List of input file names
+            previous_content: Mk-2 content (required for Mk-3)
+            
+        Returns:
+            Formatted prompt string
+        """
+        template_key = f"{stage.lower()}_template"
+        
+        if template_key not in self.templates:
+            raise ValueError(f"No template found for stage: {stage}")
+        
+        template_data = self.templates[template_key]
+        template = Template(template_data['template'])
+        
+        # Render template with variables
+        prompt = template.render(
+            topic_name=topic_name,
+            module_name=module_name,
+            files=file_names,
+            previous_content=previous_content or ""
+        )
+        
+        return prompt
+    
+    def get_required_files_for_stage(self, stage: str) -> List[str]:
+        """
+        Returns the content types required for a given stage.
+        """
+        requirements = {
+            "MK1": ["LECTURE_PDF"],
+            "MK2": ["LECTURE_PDF", "SOURCE_MATERIAL", "TUTORIAL_PDF"],
+            "MK3": ["LECTURE_PDF", "SOURCE_MATERIAL", "TUTORIAL_PDF", "TRANSCRIPT"]
+        }
+        return requirements.get(stage, [])
+```
+
+---
+
+## 9. Critical Implementation Details
+
+### 9.1 Known Pitfalls & Solutions
+
+#### 9.1.1 Notion Markdown Conversion
+
+```
+PROBLEM:
+Notion API does NOT accept raw markdown. It requires Block Objects.
+
+WRONG APPROACH:
+notion_client.pages.create(content=markdown_text)  # WILL FAIL
+
+CORRECT APPROACH:
+1. Install: pip install martian-py
+2. Convert: blocks = convert_markdown_to_notion_blocks(markdown_text)
+3. Send: notion_client.blocks.children.append(block_id, children=blocks)
+
+TESTING REQUIRED:
+- Test with headings (h1-h6)
+- Test with nested lists
+- Test with code blocks
+- Test with Mermaid diagrams
+- Test with tables
+- Test with very long content (>100 blocks)
+```
+
+#### 9.1.2 Clipboard in Streamlit
+
+```
+PROBLEM:
+pyperclip uses system clipboard APIs that don't work in browser context.
+Streamlit runs Python server-side, clipboard is client-side (browser).
+
+WRONG APPROACH:
+import pyperclip
+pyperclip.copy(text)  # WILL FAIL in browser
+
+CORRECT APPROACH:
+Use JavaScript via streamlit.components.v1.html():
+
+import streamlit.components.v1 as components
+
+js_code = f'''
+<script>
+function copyText() {{
+    navigator.clipboard.writeText(`{escaped_text}`);
+}}
+</script>
+<button onclick="copyText()">Copy</button>
+'''
+components.html(js_code, height=50)
+```
+
+#### 9.1.3 Google OAuth Token Refresh
+
+```
+PROBLEM:
+Access tokens expire after 1 hour. Users shouldn't re-authenticate constantly.
+
+WRONG APPROACH:
+Only storing access_token, no refresh logic.
+
+CORRECT APPROACH:
+1. Use InstalledAppFlow which provides refresh_token
+2. Pickle the entire Credentials object
+3. Check creds.expired on each use
+4. Call creds.refresh(Request()) when expired
+
+# Critical code:
+if creds and creds.expired and creds.refresh_token:
+    creds.refresh(Request())  # Refreshes automatically
+```
+
+#### 9.1.4 Large Content Handling
+
+```
+PROBLEM:
+Notion has limits:
+- Max 100 blocks per append request
+- Max 2000 characters per text block
+
+SOLUTION:
+1. Chunk blocks into batches of 100
+2. Split long text blocks
+
+def append_blocks_chunked(page_id: str, blocks: List[dict]):
+    for i in range(0, len(blocks), 100):
+        chunk = blocks[i:i+100]
+        notion_client.blocks.children.append(
+            block_id=page_id,
+            children=chunk
+        )
+        time.sleep(0.3)  # Rate limit protection
+```
+
+### 9.2 Environment Configuration
+
+```python
+# config/settings.py
+
+import os
+from pathlib import Path
+from dataclasses import dataclass
+from dotenv import load_dotenv
+
+load_dotenv()
+
+@dataclass
+class Settings:
+    # Paths
+    BASE_DIR: Path = Path(__file__).parent.parent
+    DATA_DIR: Path = BASE_DIR / "data"
+    CREDENTIALS_DIR: Path = DATA_DIR / "credentials"
+    DATABASE_PATH: Path = DATA_DIR / "lawflow.db"
+    
+    # Google Drive
+    GOOGLE_CREDENTIALS_PATH: Path = CREDENTIALS_DIR / "google_credentials.json"
+    GOOGLE_TOKEN_PATH: Path = CREDENTIALS_DIR / "token.pickle"
+    DRIVE_ROOT_FOLDER: str = "LawFlow"
+    
+    # Notion
+    NOTION_TOKEN: str = os.getenv("NOTION_TOKEN", "")
+    
+    # App
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+    
+    def validate(self):
+        """Validate all required configuration is present."""
+        errors = []
+        
+        if not self.GOOGLE_CREDENTIALS_PATH.exists():
+            errors.append(
+                f"Google credentials not found at {self.GOOGLE_CREDENTIALS_PATH}\n"
+                "See README for setup instructions."
+            )
+        
+        if not self.NOTION_TOKEN:
+            errors.append(
+                "NOTION_TOKEN not set in environment.\n"
+                "Create a .env file with NOTION_TOKEN=secret_xxx"
+            )
+        
+        if errors:
+            raise ConfigurationError("\n\n".join(errors))
+
+
+class ConfigurationError(Exception):
+    pass
+
+
+settings = Settings()
+```
+
+```bash
+# .env.example
+
+# Notion Integration
+# Get from: https://www.notion.so/my-integrations
+NOTION_TOKEN=secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Database IDs (one per module - set after creating databases)
+NOTION_DB_LAND_LAW=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+NOTION_DB_EMPLOYMENT_LAW=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# Debug mode
+DEBUG=false
+```
+
+---
+
+## 10. Development Roadmap
+
+### 10.1 Adjusted Sprint Order
+
+Based on risk analysis, Notion integration moved earlier to fail fast.
+
+```
+PHASE 1: Foundation + Notion Proof (Sprint 1-2)
+├── Sprint 1: Project setup, database, basic UI
+└── Sprint 2: Notion integration (CRITICAL PATH)
+
+PHASE 2: Content Management (Sprint 3-4)
+├── Sprint 3: Google Drive integration
+└── Sprint 4: Content vault UI
+
+PHASE 3: Generation System (Sprint 5-6)
+├── Sprint 5: Prompt builder, stage logic
+└── Sprint 6: Generation modal, clipboard
+
+PHASE 4: Polish & Release (Sprint 7-8)
+├── Sprint 7: Error handling, UX polish
+└── Sprint 8: Documentation, GitHub release
+```
+
+### 10.2 Sprint 1: Foundation (Days 1-5)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| Project scaffolding | 2 | Folder structure, venv, requirements.txt |
+| SQLite schema + migrations | 3 | Working database with all tables |
+| Database connection manager | 2 | Context manager for connections |
+| Base repository pattern | 2 | CRUD operations template |
+| Module repository | 2 | Full CRUD for modules |
+| Topic repository | 2 | Full CRUD for topics |
+| Basic Streamlit shell | 2 | Running app with routing |
+| Sidebar navigation | 3 | Module/topic tree |
+
+**Milestone:** App runs, can create/view modules and topics.
+
+### 10.3 Sprint 2: Notion Integration - CRITICAL PATH (Days 6-10)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| Notion client setup | 2 | Auth working, test connection |
+| martian-py integration | 3 | Markdown → blocks conversion |
+| Block validation/chunking | 3 | Handle large content, limits |
+| Page creation | 3 | Create page with properties |
+| Block appending | 3 | Content appears in Notion |
+| Error handling | 2 | Graceful failures, retry logic |
+| Integration tests | 4 | End-to-end test with real Notion |
+
+**Milestone:** Can create Notion page from markdown string programmatically.
+
+**GATE CHECK:** If Notion integration is too unreliable, pivot to:
+- Markdown file output only
+- Alternative: Obsidian vault output
+- Alternative: HTML export
+
+### 10.4 Sprint 3: Google Drive (Days 11-15)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| OAuth flow implementation | 4 | Auth + token persistence |
+| Drive client wrapper | 3 | Upload, list, delete operations |
+| Folder structure creation | 3 | Auto-create module/topic folders |
+| File upload with progress | 3 | Upload to correct folder |
+| Content repository integration | 3 | Track files in database |
+| Error handling | 2 | Handle auth failures, quotas |
+
+**Milestone:** Files upload to Drive, tracked in database.
+
+### 10.5 Sprint 4: Content Vault UI (Days 16-20)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| Topic page layout | 3 | Two-column layout |
+| Content type cards | 4 | Four card components |
+| File uploader integration | 4 | Upload triggers Drive + DB |
+| File list display | 3 | Show uploaded files |
+| Remove file functionality | 2 | Soft delete + Drive cleanup |
+| N/A toggle | 2 | Mark types as not applicable |
+
+**Milestone:** Complete content vault, files persist correctly.
+
+### 10.6 Sprint 5: Prompt Builder (Days 21-25)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| Template loading system | 2 | YAML → Jinja2 |
+| Mk-1 prompt builder | 2 | Working template |
+| Mk-2 prompt builder | 2 | Working template |
+| Mk-3 prompt builder | 3 | Include Mk-2 content |
+| Stage requirement checker | 3 | Unlock logic |
+| Stage cards UI | 4 | Three cards with status |
+| Generation repository | 2 | CRUD for generations |
+
+**Milestone:** Click generate, see correct prompt.
+
+### 10.7 Sprint 6: Generation Flow (Days 26-30)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| Claude file checklist | 3 | UX component |
+| Generation modal layout | 3 | Three-step flow |
+| Clipboard JS bridge | 3 | Copy button works |
+| Response paste area | 2 | Large textarea |
+| Output service | 4 | Process → Notion + Drive |
+| Success/error states | 3 | Proper feedback |
+
+**Milestone:** Complete end-to-end generation flow.
+
+### 10.8 Sprint 7: Polish (Days 31-35)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| Dashboard page | 4 | Overview stats, recent activity |
+| Error handling audit | 3 | All error paths covered |
+| Loading states | 2 | Spinners, feedback |
+| Settings page | 3 | Database IDs, preferences |
+| Version history view | 3 | See previous generations |
+| Regenerate functionality | 2 | Create new version |
+
+**Milestone:** Production-ready application.
+
+### 10.9 Sprint 8: Release (Days 36-40)
+
+| Task | Hours | Deliverable |
+|------|-------|-------------|
+| README with screenshots | 4 | Professional documentation |
+| Setup guide | 3 | Step-by-step instructions |
+| Contributing guide | 2 | For other developers |
+| License (MIT) | 1 | Open source ready |
+| GitHub repo setup | 2 | Issues, labels, templates |
+| Demo GIF/video | 3 | Visual showcase |
+
+**Milestone:** Published to GitHub, portfolio-ready.
+
+---
+
+## 11. Project Structure
+
+```
+lawflow/
+│
+├── app.py                          # Streamlit entry point
+├── requirements.txt                # Dependencies
+├── README.md                       # Documentation
+├── LICENSE                         # MIT
+├── .gitignore
+├── .env.example                    # Environment template
+│
+├── config/
+│   ├── __init__.py
+│   ├── settings.py                 # Configuration loader
+│   └── prompts/
+│       ├── mk1_template.yaml
+│       ├── mk2_template.yaml
+│       └── mk3_template.yaml
+│
+├── database/
+│   ├── __init__.py
+│   ├── connection.py               # SQLite connection
+│   ├── models.py                   # Dataclasses
+│   ├── schema.sql                  # Table definitions
+│   └── repositories/
+│       ├── __init__.py
+│       ├── base.py                 # Base repository
+│       ├── module_repo.py
+│       ├── topic_repo.py
+│       ├── content_repo.py
+│       └── generation_repo.py
+│
+├── services/
+│   ├── __init__.py
+│   ├── content_service.py          # File management
+│   ├── generation_service.py       # Generation orchestration
+│   ├── prompt_service.py           # Prompt building
+│   └── output_service.py           # Response processing
+│
+├── integrations/
+│   ├── __init__.py
+│   ├── drive_client.py             # Google Drive API
+│   ├── notion_client.py            # Notion API
+│   └── markdown_converter.py       # MD → Notion blocks
+│
+├── ui/
+│   ├── __init__.py
+│   ├── components/
+│   │   ├── __init__.py
+│   │   ├── sidebar.py
+│   │   ├── content_vault.py
+│   │   ├── stage_cards.py
+│   │   ├── generation_modal.py
+│   │   ├── clipboard.py            # JS bridge
+│   │   └── claude_file_checklist.py
+│   └── pages/
+│       ├── __init__.py
+│       ├── dashboard.py
+│       ├── topic.py
+│       └── settings.py
+│
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_notion_integration.py  # Critical tests
+│   ├── test_drive_integration.py
+│   ├── test_prompt_builder.py
+│   └── test_markdown_converter.py
+│
+└── data/                           # Gitignored
+    ├── lawflow.db
+    └── credentials/
+        ├── google_credentials.json
+        └── token.pickle
+```
+
+---
+
+## 12. Setup & Configuration
+
+### 12.1 Quick Start
+
+```bash
+# 1. Clone repository
+git clone https://github.com/yourusername/lawflow.git
+cd lawflow
+
+# 2. Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Set up environment
+cp .env.example .env
+# Edit .env with your Notion token
+
+# 5. Set up Google credentials
+# Follow instructions in README for Google Cloud setup
+# Place google_credentials.json in data/credentials/
+
+# 6. Run the app
+streamlit run app.py
+```
+
+### 12.2 Requirements
+
+```
+# requirements.txt
+
+# Web Framework
+streamlit>=1.28.0
+
+# Google APIs
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# Notion
+notion-client>=2.0.0
+martian-py>=0.1.0  # Markdown to Notion blocks
+
+# Templates
+jinja2>=3.1.2
+pyyaml>=6.0
+
+# Utils
+python-dotenv>=1.0.0
+humanize>=4.8.0
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.0.0
+flake8>=6.1.0
+```
+
+---
+
+## 13. Testing Strategy
+
+### 13.1 Critical Tests
+
+```python
+# tests/test_notion_integration.py
+
+import pytest
+from integrations.markdown_converter import markdown_to_notion_blocks
+from integrations.notion_client import NotionClient
+
+class TestMarkdownConversion:
+    """
+    CRITICAL: These tests must pass before any other development.
+    If markdown conversion doesn't work, the entire app fails.
+    """
+    
+    def test_heading_conversion(self):
+        md = "# Heading 1\n## Heading 2\n### Heading 3"
+        blocks = markdown_to_notion_blocks(md)
+        assert len(blocks) == 3
+        assert blocks[0]['type'] == 'heading_1'
+        assert blocks[1]['type'] == 'heading_2'
+        assert blocks[2]['type'] == 'heading_3'
+    
+    def test_paragraph_conversion(self):
+        md = "This is a paragraph.\n\nThis is another paragraph."
+        blocks = markdown_to_notion_blocks(md)
+        assert len(blocks) == 2
+        assert all(b['type'] == 'paragraph' for b in blocks)
+    
+    def test_bullet_list_conversion(self):
+        md = "- Item 1\n- Item 2\n- Item 3"
+        blocks = markdown_to_notion_blocks(md)
+        assert len(blocks) == 3
+        assert all(b['type'] == 'bulleted_list_item' for b in blocks)
+    
+    def test_bold_italic_conversion(self):
+        md = "This has **bold** and *italic* text."
+        blocks = markdown_to_notion_blocks(md)
+        # Check rich_text contains annotations
+        rich_text = blocks[0]['paragraph']['rich_text']
+        # Should have multiple segments with different annotations
+        assert len(rich_text) > 1
+    
+    def test_code_block_conversion(self):
+        md = "```python\nprint('hello')\n```"
+        blocks = markdown_to_notion_blocks(md)
+        assert blocks[0]['type'] == 'code'
+    
+    def test_long_content_chunking(self):
+        """Test that content over 100 blocks gets chunked properly."""
+        md = "\n\n".join([f"Paragraph {i}" for i in range(150)])
+        blocks = markdown_to_notion_blocks(md)
+        assert len(blocks) == 150
+    
+    def test_mermaid_diagram(self):
+        """Test Mermaid flowchart conversion."""
+        md = "```mermaid\nflowchart TD\n    A --> B\n```"
+        blocks = markdown_to_notion_blocks(md)
+        # Should convert to code block with mermaid language
+        assert blocks[0]['type'] == 'code'
+
+
+@pytest.mark.integration
+class TestNotionAPI:
+    """
+    Integration tests - require real Notion credentials.
+    Run with: pytest -m integration
+    """
+    
+    @pytest.fixture
+    def notion_client(self):
+        import os
+        token = os.getenv("NOTION_TOKEN")
+        if not token:
+            pytest.skip("NOTION_TOKEN not set")
+        return NotionClient(token)
+    
+    def test_create_page(self, notion_client):
+        """Test creating a real page in Notion."""
+        # Use a test database ID
+        test_db_id = os.getenv("NOTION_TEST_DB_ID")
+        if not test_db_id:
+            pytest.skip("NOTION_TEST_DB_ID not set")
+        
+        blocks = markdown_to_notion_blocks("# Test Page\n\nThis is a test.")
+        
+        result = notion_client.create_page(
+            database_id=test_db_id,
+            title="Test Page - Delete Me",
+            properties={
+                "Stage": "MK1",
+                "Version": 1
+            },
+            content_blocks=blocks
+        )
+        
+        assert result['id'] is not None
+        assert result['url'] is not None
+```
+
+### 13.2 Test Coverage Requirements
+
+| Component | Minimum Coverage |
+|-----------|------------------|
+| markdown_converter.py | 90% |
+| notion_client.py | 80% |
+| drive_client.py | 70% |
+| prompt_service.py | 80% |
+| repositories | 70% |
+
+---
+
+## 14. Risk Register
+
+| ID | Risk | Likelihood | Impact | Mitigation | Contingency |
+|----|------|------------|--------|------------|-------------|
+| R1 | martian-py doesn't handle all markdown | Medium | High | Test extensively early | Fork and fix, or manual conversion |
+| R2 | Notion rate limits | Low | Medium | Add delays, batch operations | Implement queue system |
+| R3 | Google OAuth too complex for users | Medium | Medium | Detailed setup guide with screenshots | Offer local-only mode |
+| R4 | Clipboard JS fails in some browsers | Low | Medium | Test across browsers | Fallback to select-all text |
+| R5 | Large prompts exceed Claude context | Low | Medium | Character counter in UI | Warn user, suggest splitting |
+| R6 | Token.pickle corrupted | Low | High | Try/except on load | Auto-delete and re-auth |
+
+---
+
+## Document History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Dec 2025 | Initial PRD |
+| 2.0 | Dec 2025 | Added critical implementation details, adjusted roadmap based on risk analysis, added clipboard JS solution, added Notion block conversion details |
+
+---
+
+**END OF DOCUMENT**
