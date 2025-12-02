@@ -75,15 +75,17 @@ class ContentItem:
         topic_id: str,
         content_type: ContentType,
         file_name: str,
-        file_size_bytes: int
+        file_size_bytes: int,
+        drive_file_id: Optional[str] = None,
+        drive_url: Optional[str] = None
     ) -> 'ContentItem':
         return ContentItem(
             id=str(uuid.uuid4()),
             topic_id=topic_id,
             content_type=content_type,
             file_name=file_name,
-            drive_file_id=None,
-            drive_url=None,
+            drive_file_id=drive_file_id,
+            drive_url=drive_url,
             uploaded_at=datetime.utcnow(),
             file_size_bytes=file_size_bytes,
             is_active=True

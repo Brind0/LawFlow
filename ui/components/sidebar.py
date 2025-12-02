@@ -42,28 +42,63 @@ def render_sidebar(conn):
                         st.rerun()
                 
                 # Add Topic Button
-                if st.button("➕ New Topic", key=f"add_topic_{module.id}"):
-                    # In a real app this would open a modal
-                    # For Sprint 1, we'll just show a placeholder toast
-                    st.toast(f"Create topic for {module.name} (Coming Soon)")
+                if st.button("➕ New Topic", key=f"add_topic_btn_{module.id}"):
+                    st.session_state[f"show_topic_form_{module.id}"] = True
+                
+                if st.session_state.get(f"show_topic_form_{module.id}", False):
+                    with st.form(f"new_topic_form_{module.id}"):
+                        st.write(f"Add Topic to {module.name}")
+                        topic_name = st.text_input("Topic Name")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("Create"):
+                                if topic_name:
+                                    try:
+                                        new_topic = Topic.create(module.id, topic_name)
+                                        topic_repo.create(new_topic)
+                                        st.success(f"Created {topic_name}!")
+                                        st.session_state[f"show_topic_form_{module.id}"] = False
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+                                else:
+                                    st.warning("Name required")
+                        with col2:
+                            if st.form_submit_button("Cancel"):
+                                st.session_state[f"show_topic_form_{module.id}"] = False
+                                st.rerun()
         
         st.divider()
         
         # Add Module Button
         if st.button("➕ New Module", use_container_width=True):
-             # Placeholder for Sprint 1
+            st.session_state.show_module_form = True
+            
+        if st.session_state.get('show_module_form', False):
              with st.form("new_module_form"):
                  st.write("Create New Module")
                  name = st.text_input("Module Name")
                  project = st.text_input("Claude Project Name")
-                 if st.form_submit_button("Create"):
-                     try:
-                         new_module = Module.create(name, project)
-                         module_repo.create(new_module)
-                         st.success(f"Created {name}!")
+                 
+                 col1, col2 = st.columns(2)
+                 with col1:
+                     if st.form_submit_button("Create"):
+                         if name:
+                             try:
+                                 new_module = Module.create(name, project)
+                                 module_repo.create(new_module)
+                                 st.success(f"Created {name}!")
+                                 st.session_state.show_module_form = False
+                                 st.rerun()
+                             except Exception as e:
+                                 st.error(f"Error: {e}")
+                         else:
+                             st.warning("Name required")
+                 with col2:
+                     if st.form_submit_button("Cancel"):
+                         st.session_state.show_module_form = False
                          st.rerun()
-                     except Exception as e:
-                         st.error(f"Error: {e}")
 
         st.divider()
         
