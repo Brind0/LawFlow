@@ -25,16 +25,18 @@ class Module:
     id: str
     name: str
     claude_project_name: Optional[str]
+    notion_database_id: Optional[str]
     created_at: datetime
     updated_at: datetime
-    
+
     @staticmethod
-    def create(name: str, claude_project_name: str = None) -> 'Module':
+    def create(name: str, claude_project_name: str = None, notion_database_id: str = None) -> 'Module':
         now = datetime.utcnow()
         return Module(
             id=str(uuid.uuid4()),
             name=name,
             claude_project_name=claude_project_name,
+            notion_database_id=notion_database_id,
             created_at=now,
             updated_at=now
         )

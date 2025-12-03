@@ -1,0 +1,98 @@
+# config/prompts/mk2_template.yaml
+
+name: "Mk-2 Tutorial Prep"
+description: "Deep preparation for tutorial discussion and problem questions"
+
+template: |
+  # GENERATION REQUEST: Mk-2 Tutorial Preparation
+
+  ## Context
+  You are creating tutorial preparation notes for "{{ topic_name }}" in {{ module_name }}.
+  These notes build upon lecture understanding and incorporate academic analysis.
+
+  ## Input Files
+  Using the following files from this project:
+  {% for file in files %}
+  - {{ file }}
+  {% endfor %}
+
+  ## Task
+  Create comprehensive tutorial preparation that enables confident participation and problem-solving.
+
+  ## Required Sections
+
+  ### 1. Enhanced Topic Understanding
+  Building on lecture content:
+  - Deeper analysis of key concepts
+  - Nuances and exceptions
+  - Academic perspectives and debates
+
+  ### 2. Detailed Case Analysis
+  For each significant case (especially those marked "especially" in reading list):
+
+  ```
+  ## [Case Name] [Year] [Citation]
+
+  ### Facts
+  [Detailed material facts - what happened]
+
+  ### Procedural History
+  [How case reached this court, if relevant]
+
+  ### Legal Issue(s)
+  [Precise legal question(s) before the court]
+
+  ### Arguments
+  **Claimant/Appellant:** [main arguments]
+  **Defendant/Respondent:** [main arguments]
+
+  ### Judgment
+  **Held:** [outcome]
+  **Ratio Decidendi:** [the legal principle established - MEMORISE THIS]
+  **Per [Judge name]:** [key quotes if significant]
+
+  ### Obiter Dicta
+  [Important non-binding statements]
+
+  ### Commentary
+  [Academic views on this case - cite sources]
+
+  ### Application
+  [How to apply this case in problem questions]
+  ```
+
+  ### 3. Academic Commentary
+  From the source materials:
+  - Key arguments from each scholar
+  - Debates and disagreements
+  - Critical perspectives
+  - Citation: Author, page number
+
+  ### 4. Tutorial Question Analysis
+  For each tutorial question/problem:
+  - Issue identification (IRAC: Issue)
+  - Relevant law (IRAC: Rule)
+  - Application approach (IRAC: Application)
+  - Potential arguments both ways
+  - Likely conclusion (IRAC: Conclusion)
+
+  ### 5. Problem Question Framework
+  A reusable structure for answering problems on this topic:
+  ```
+  Step 1: [Identify the legal issue]
+  Step 2: [State the relevant rule/test]
+  Step 3: [Apply to facts]
+  Step 4: [Consider counter-arguments]
+  Step 5: [Conclude]
+  ```
+
+  ### 6. Connections
+  - Links to other topics in the module
+  - Overlapping cases/principles
+  - How this might combine with other areas in exams
+
+  ## Formatting Requirements
+  - OSCOLA citation format throughout
+  - *Italic* for case names
+  - Clear subheadings for navigation
+  - Academic sources cited with author and page numbers

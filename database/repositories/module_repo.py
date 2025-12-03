@@ -6,13 +6,14 @@ from datetime import datetime
 class ModuleRepository(BaseRepository[Module]):
     def create(self, module: Module) -> Module:
         query = """
-            INSERT INTO modules (id, name, claude_project_name, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO modules (id, name, claude_project_name, notion_database_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         """
         self.conn.execute(query, (
             module.id,
             module.name,
             module.claude_project_name,
+            module.notion_database_id,
             module.created_at,
             module.updated_at
         ))
@@ -33,18 +34,19 @@ class ModuleRepository(BaseRepository[Module]):
     
     def update(self, module: Module) -> Module:
         query = """
-            UPDATE modules 
-            SET name = ?, claude_project_name = ?, updated_at = ?
+            UPDATE modules
+            SET name = ?, claude_project_name = ?, notion_database_id = ?, updated_at = ?
             WHERE id = ?
         """
         self.conn.execute(query, (
             module.name,
             module.claude_project_name,
+            module.notion_database_id,
             datetime.utcnow(),
             module.id
         ))
         # Refresh updated_at from object (approximate) or fetch again
-        module.updated_at = datetime.utcnow() 
+        module.updated_at = datetime.utcnow()
         return module
     
     def delete(self, id: str) -> bool:
@@ -57,6 +59,7 @@ class ModuleRepository(BaseRepository[Module]):
             id=row['id'],
             name=row['name'],
             claude_project_name=row['claude_project_name'],
+            notion_database_id=row['notion_database_id'],
             created_at=row['created_at'], # SQLite stores as string, might need parsing if strict datetime needed
             updated_at=row['updated_at']
         )

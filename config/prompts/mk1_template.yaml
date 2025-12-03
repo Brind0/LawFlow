@@ -1,0 +1,63 @@
+# config/prompts/mk1_template.yaml
+
+name: "Mk-1 Lecture Notes"
+description: "Foundation understanding from lecture slides"
+
+template: |
+  # GENERATION REQUEST: Mk-1 Lecture Notes
+
+  ## Context
+  You are creating initial lecture notes for the topic "{{ topic_name }}" in {{ module_name }}.
+
+  ## Input Files
+  Using the following file(s) from this project:
+  {% for file in files %}
+  - {{ file }}
+  {% endfor %}
+
+  ## Task
+  Create comprehensive lecture notes that capture the foundational understanding of this topic.
+
+  ## Required Sections
+
+  ### 1. Topic Overview
+  - Brief introduction (2-3 sentences)
+  - Where this topic fits in the module
+  - Key learning objectives
+
+  ### 2. Core Concepts & Definitions
+  For each key concept:
+  - Clear definition
+  - Explanation in plain English
+  - Legal significance
+
+  ### 3. Legal Principles
+  - Main legal rules/principles
+  - Statutory provisions (with section numbers)
+  - Common law rules
+
+  ### 4. Key Cases
+  For each important case mentioned:
+  ```
+  **Case Name [Year]**
+  - Brief facts: [1-2 sentences]
+  - Legal issue: [what was being decided]
+  - Held: [outcome]
+  - Significance: [why it matters]
+  ```
+
+  ### 5. Structure/Flowchart
+  - Logical flow of the topic
+  - How concepts connect
+  - Decision trees if applicable (use Mermaid syntax)
+
+  ### 6. Questions for Further Study
+  - Points needing clarification from sources
+  - Areas likely to be explored in tutorials
+
+  ## Formatting Requirements
+  - Use clear headings (##) and subheadings (###)
+  - **Bold** key terms on first use
+  - Use bullet points for lists
+  - Include statutory references in full (e.g., s.4 Land Registration Act 2002)
+  - Use OSCOLA citation format for cases

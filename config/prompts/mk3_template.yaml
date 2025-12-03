@@ -1,0 +1,124 @@
+# config/prompts/mk3_template.yaml
+
+name: "Mk-3 Final Revision Notes"
+description: "Comprehensive master document for exam revision"
+
+template: |
+  # GENERATION REQUEST: Mk-3 Final Revision Notes
+
+  ## Context
+  You are creating the definitive revision document for "{{ topic_name }}" in {{ module_name }}.
+  This is the master document for exam preparation, synthesising ALL materials and insights.
+
+  ## Input Files
+  Using the following files from this project:
+  {% for file in files %}
+  - {{ file }}
+  {% endfor %}
+
+  ## Previous Notes (Mk-2 Tutorial Prep)
+  The following tutorial preparation notes have been created:
+
+  ---
+  {{ previous_content }}
+  ---
+
+  ## Task
+  Create comprehensive, exam-ready revision notes that serve as the SINGLE SOURCE OF TRUTH for this topic.
+
+  ## Required Sections
+
+  ### 1. Executive Summary
+  - Topic explained in one paragraph (for quick recall)
+  - 5 KEY POINTS to remember (bullet points, memorise these)
+  - THE most important case for this topic
+
+  ### 2. Complete Legal Framework
+
+  #### 2.1 Statutory Framework
+  - All relevant statutes with section numbers
+  - Key provisions quoted/paraphrased
+  - How sections interact
+
+  #### 2.2 Common Law Framework
+  - Judge-made rules and principles
+  - How they supplement/interact with statute
+
+  ### 3. Master Case Bank
+
+  For EVERY case relevant to this topic, create a revision card:
+
+  ```
+  ┌─────────────────────────────────────────────────────────────┐
+  │ CASE NAME [YEAR] CITATION                                    │
+  ├─────────────────────────────────────────────────────────────┤
+  │ FACTS (1 sentence): [What happened]                          │
+  │                                                              │
+  │ RATIO (memorise): [The legal principle]                      │
+  │                                                              │
+  │ USE FOR: [When to cite this case in an exam]                 │
+  │                                                              │
+  │ COMPARE WITH: [Related/contrasting cases]                    │
+  └─────────────────────────────────────────────────────────────┘
+  ```
+
+  ### 4. Problem Question Flowchart
+
+  Create a complete decision flowchart in Mermaid format:
+
+  ```mermaid
+  flowchart TD
+      A[Identify Issue] --> B{First Question to Ask}
+      B -->|Yes| C[Apply Rule X]
+      B -->|No| D[Apply Rule Y]
+      C --> E{Next consideration}
+      ...
+  ```
+
+  ### 5. Essay Question Preparation
+  - Common essay angles for this topic
+  - Key debates to discuss (with academic citations)
+  - Strong opening statement templates
+  - Strong concluding statement templates
+
+  ### 6. Exam Technique for This Topic
+  - Suggested time allocation
+  - Common mistakes to avoid
+  - What examiners look for
+  - How to structure answers
+
+  ### 7. Transcript Insights
+  Additional points from the lecture recording not in slides:
+  - Lecturer's emphasis points
+  - Verbal examples given
+  - Hints about exam focus
+  - Clarifications of complex points
+
+  ### 8. Quick Reference Card
+
+  One-page summary for last-minute review:
+
+  ```
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║                      {{ topic_name | upper }}                  ║
+  ╠═══════════════════════════════════════════════════════════════╣
+  ║ KEY STATUTE: [Name and key sections]                          ║
+  ║                                                                ║
+  ║ LEADING CASE: [Case name] - [ratio in ≤10 words]              ║
+  ║                                                                ║
+  ║ THE TEST/FRAMEWORK:                                            ║
+  ║ 1. [Step one]                                                  ║
+  ║ 2. [Step two]                                                  ║
+  ║ 3. [Step three]                                                ║
+  ║                                                                ║
+  ║ EXAM TIP: [Most important advice]                              ║
+  ╚═══════════════════════════════════════════════════════════════╝
+  ```
+
+  ## Formatting Requirements
+  - Use toggle headings for long sections (where Notion supports)
+  - Include Mermaid flowcharts (Notion renders these)
+  - Tables for case comparisons
+  - **Bold** key terms and case names
+  - OSCOLA citations throughout
+  - Page numbers from sources where available
